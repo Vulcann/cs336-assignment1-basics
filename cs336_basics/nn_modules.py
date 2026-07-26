@@ -107,3 +107,49 @@ class SwiGLU(torch.nn.Module):
         # silu_w3x = silu * w3x
         # return einsum(self.weight_w2, silu_w3x, "d_model d_ff, ... d_ff -> ... d_model")
         return self.w2(self.silu(self.w1(x)) * self.w3(x))
+
+
+class RoPE(torch.nn.Module):
+    def __init__(self, d_model: int, max_seq_length: int, theta: float, device=None, dtype=None):
+        super(RoPE, self).__init__()
+
+        self.d_model = d_model
+        self.max_seq_length = max_seq_length
+        self.theta = theta
+
+        k = torch.arange(0, d_model, 2, dtype=torch.float32, device=device) / d_model
+        inv_freq = self.theta ** (-k)
+        pos = torch.arange(0, self.max_seq_length, dtype=torch.float32, device=device)
+        angles = torch.outer(pos, inv_freq)
+        # # 写法1: reshape 显式指定形状(你要的方法)
+        # angles = pos.reshape(-1, 1) * inv_freq.reshape(1, -1)     # (L,1) * (1,d/2) -> (L,d/2)
+        # # 写法2: None 索引 —— 最常见,本质就是 reshape 加一个长度1的维
+        # angles = pos[:, None] * inv_freq[None, :]
+        # # 写法3: unsqueeze —— PyTorch 风格,语义最清楚
+        # angles = pos.unsqueeze(1) * inv_freq.unsqueeze(0)         # 在 dim1/dim0 各插一维
+        # # 写法4：
+        # angles = torch.einsum("i,j->ij", pos, inv_freq)
+
+        # use registered_buffer to save max_seq_length * d_model/2 rotation angles (not learnable),
+        # or two tables of length max_seq_length * d_model/2, one for sin and one for cos
+        self.register_buffer("cos", torch.cos(angles), persistent=False)
+        self.register_buffer("sin", torch.sin(angles), persistent=False)
+
+    def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        """
+        x: "batch_size, seq_length, d_model"
+        positions: "batch_size, seq_length"
+        """
+
+        # use indexing to get the block matrix (2x2) for each position i
+        cos = self.cos[positions]
+        sin = self.sin[positions]
+
+        # construct a matrix "d_model d_model" from d_model/2 blocks
+        x1 = x[..., 0::2]  # 偶数维 [..., seq_len, d/2]
+        x2 = x[..., 1::2]  # 奇数维
+
+        out = torch.empty_like(x)
+        out[..., 0::2] = x1 * cos - x2 * sin
+        out[..., 1::2] = x1 * sin + x2 * cos
+        return out

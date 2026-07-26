@@ -221,7 +221,11 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    from cs336_basics import nn_modules
+
+    rope = nn_modules.RoPE(d_model=d_k, max_seq_length=max_seq_len, theta=theta)
+    return rope(x=in_query_or_key, positions=token_positions)
 
 
 def run_transformer_block(
@@ -424,7 +428,6 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
 
     silu = nn_modules.SiLU()
     return silu(in_features)
-
 
 
 def run_get_batch(
