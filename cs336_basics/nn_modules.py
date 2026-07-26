@@ -153,3 +153,23 @@ class RoPE(torch.nn.Module):
         out[..., 0::2] = x1 * cos - x2 * sin
         out[..., 1::2] = x1 * sin + x2 * cos
         return out
+
+
+class Softmax(nn.Module):
+    def __init__(self, device=None, dtype=None):
+        super(Softmax, self).__init__()
+
+    def forward(self, x: torch.Tensor, dim: int) -> torch.Tensor:
+        """balance logits and create the normalized probability distribution
+
+        Args:
+            x (torch.Tensor): "..."
+            int: the dimention which softmax applies on
+
+        Returns:
+            torch.Tensor: "..."
+        """
+
+        x_dim = x - torch.max(x, dim, keepdim=True).values
+        x_dim_exp = torch.exp(x_dim)
+        return x_dim_exp / torch.sum(x_dim_exp, dim, keepdim=True)
