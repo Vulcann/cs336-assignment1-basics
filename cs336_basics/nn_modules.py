@@ -227,7 +227,7 @@ class MultiheadSelfAttention(nn.Module):
         self.q_proj = Linear(d_model, d_model)
         self.k_proj = Linear(d_model, d_model)
         self.v_proj = Linear(d_model, d_model)
-        self.o_proj = Linear(d_model, d_model)
+        self.output_proj = Linear(d_model, d_model)
 
     def forward(self, x: torch.Tensor, positions: torch.Tensor = None) -> torch.Tensor:
         '''
@@ -253,7 +253,7 @@ class MultiheadSelfAttention(nn.Module):
 
         out = self.attn(Q=Q, K=K, V=V, mask=mask)  # 一次调用，heads 随 ... 广播
         out = rearrange(out, "... h s d -> ... s (h d)")  # 合头
-        return self.o_proj(out)
+        return self.output_proj(out)
         # Q = self.q_proj(x)
         # K = self.k_proj(x)
         # V = self.v_proj(x)
@@ -266,4 +266,61 @@ class MultiheadSelfAttention(nn.Module):
         #         Q_i = self.rope(Q_i, positions)
         #         K_i = self.rope(K_i, positions)
         #     attn[..., i : i + self.d_k] = self.attn(Q=Q_i, K=K_i, V=V_i, mask=mask)
-        # return self.o_proj(attn)
+        # return self.output_proj(attn)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, d_ff: int, theta: float | None = None):
+        super(TransformerBlock, self).__init__()
+
+        self.attn = MultiheadSelfAttention(d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len, theta=theta)
+        self.ffn = SwiGLU(d_model=d_model, d_ff=d_ff)
+        self.ln1 = RMSNorm(d_model=d_model)
+        self.ln2 = RMSNorm(d_model=d_model)
+
+    def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        ln1 = self.ln1(x)
+        attn = self.attn(ln1, positions)
+        x = x + attn
+
+        ln2 = self.ln2(x)
+        result = self.ffn(ln2)
+        return x + result
+
+
+class TransformerLM(nn.Module):
+    def __init__(
+        self,
+        num_layers: int,
+        vocab_size: int,
+        d_model: int,
+        num_heads: int,
+        max_seq_len: int,
+        d_ff: int,
+        theta: int | None = None,
+    ):
+        super(TransformerLM, self).__init__()
+
+        self.token_embeddings = Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
+        self.num_layers = num_layers
+        self.transformer_blocks = []
+        self.layers = nn.ModuleList(
+            [
+                TransformerBlock(d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len, d_ff=d_ff, theta=theta)
+                for _ in range(num_layers)
+            ]
+        )
+
+        self.ln_final = RMSNorm(d_model=d_model)
+        self.lm_head = Linear(in_features=d_model, out_features=vocab_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        seq_len = x.shape[-1]
+        positions = torch.arange(seq_len, dtype=torch.int, device=x.device)
+
+        x = self.token_embeddings(x)
+        for layer in self.layers:
+            x = layer(x, positions)
+
+        x = self.ln_final(x)
+        return self.lm_head(x)

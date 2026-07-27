@@ -102,7 +102,6 @@ def run_swiglu(
     from cs336_basics import nn_modules
 
     swiglu = nn_modules.SwiGLU(d_model, d_ff)
-    # swiglu.load_state_dict({"weight_w1": w1_weight, "weight_w2": w2_weight, "weight_w3": w3_weight})
     swiglu.load_state_dict({"w1.weight": w1_weight, "w2.weight": w2_weight, "w3.weight": w3_weight})
     return swiglu(in_features)
 
@@ -176,7 +175,7 @@ def run_multihead_self_attention(
             "q_proj.weight": q_proj_weight,
             "k_proj.weight": k_proj_weight,
             "v_proj.weight": v_proj_weight,
-            "o_proj.weight": o_proj_weight,
+            "output_proj.weight": o_proj_weight,
         }
     )
     return multihead_self_attention(in_features)
@@ -231,7 +230,7 @@ def run_multihead_self_attention_with_rope(
             "q_proj.weight": q_proj_weight,
             "k_proj.weight": k_proj_weight,
             "v_proj.weight": v_proj_weight,
-            "o_proj.weight": o_proj_weight,
+            "output_proj.weight": o_proj_weight,
         }
     )
     return multihead_self_attention(in_features, token_positions)
@@ -333,7 +332,31 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    from cs336_basics import nn_modules
+
+    transformer_block = nn_modules.TransformerBlock(
+        d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len, d_ff=d_ff, theta=theta
+    )
+    transformer_block.load_state_dict(
+        {
+            "attn.q_proj.weight": weights["attn.q_proj.weight"],
+            "attn.k_proj.weight": weights["attn.k_proj.weight"],
+            "attn.v_proj.weight": weights["attn.v_proj.weight"],
+            "attn.output_proj.weight": weights["attn.output_proj.weight"],
+            "ffn.w1.weight": weights["ffn.w1.weight"],
+            "ffn.w2.weight": weights["ffn.w2.weight"],
+            "ffn.w3.weight": weights["ffn.w3.weight"],
+            "ln1.weight": weights["ln1.weight"],
+            "ln2.weight": weights["ln2.weight"],
+        }
+    )
+
+    batch_size, seq_size, _ = in_features.shape
+    positions = torch.arange(seq_size, dtype=int, device=in_features.device)
+    positions = positions.unsqueeze(0).expand(batch_size, seq_size)
+
+    return transformer_block(in_features, positions)
 
 
 def run_transformer_lm(
@@ -415,7 +438,20 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    from cs336_basics import nn_modules
+
+    lm = nn_modules.TransformerLM(
+        num_layers=num_layers,
+        vocab_size=vocab_size,
+        d_model=d_model,
+        num_heads=num_heads,
+        max_seq_len=context_length,
+        d_ff=d_ff,
+        theta=rope_theta,
+    )
+    lm.load_state_dict(weights)
+    return lm(in_indices)
 
 
 def run_rmsnorm(
