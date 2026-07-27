@@ -139,6 +139,10 @@ class RoPE(torch.nn.Module):
         """
         x: "batch_size, seq_length, d_model"
         positions: "batch_size, seq_length"
+
+        docstring写 x: (batch, seq, d_model),但这不是 RoPE 在注意力里实际收到的形状。
+        RoPE 必须逐头作用在 query/key 上——在多头注意力里,q/k 早已 reshape 成 (batch, heads, seq, d_k),
+        RoPE 收到的 x 是这个四维张量,于是 x1 = x[..., 0::2] 是 (batch, heads, seq, d/2)
         """
 
         # use indexing to get the block matrix (2x2) for each position i
