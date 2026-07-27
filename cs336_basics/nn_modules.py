@@ -1,6 +1,6 @@
 import math
 
-from einops import einsum
+from einops import einsum, rearrange
 import torch
 from torch import nn
 
@@ -173,3 +173,97 @@ class Softmax(nn.Module):
         x_dim = x - torch.max(x, dim, keepdim=True).values
         x_dim_exp = torch.exp(x_dim)
         return x_dim_exp / torch.sum(x_dim_exp, dim, keepdim=True)
+
+
+class ScaledDotProductAttention(nn.Module):
+    def __init__(self, device=None, dtype=None):
+        super(ScaledDotProductAttention, self).__init__()
+        self.softmax = Softmax()
+
+    def forward(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Args:
+            Q (Float[Tensor, " ... queries d_k"]): Query tensor
+            K (Float[Tensor, " ... keys d_k"]): Key tensor
+            V (Float[Tensor, " ... keys d_v"]): Values tensor
+            mask (Bool[Tensor, " ... queries keys"] | None): Mask tensor
+        Returns:
+            Float[Tensor, " ... queries d_v"]: Output of SDPA
+        """
+
+        d_k = Q.shape[-1]
+        scores = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys") / math.sqrt(d_k)
+        scores = scores + torch.where(mask, 0.0, float("-inf"))
+        if mask is not None:
+            scores = scores.masked_fill(~mask, float("-inf"))
+        attn = self.softmax(scores, dim=-1)
+        return einsum(attn, V, "... queries keys, ... keys d_v -> ... queries d_v")
+
+
+class MultiheadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int, theta: float | None = None):
+        """
+        Args:
+            d_model (int): Dimensionality of the feedforward input and output.
+            num_heads (int): Number of heads to use in multi-headed attention.
+            max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+            q_proj_weight (Float[Tensor, "d_model d_model"]): Weights for the Q projection
+            k_proj_weight (Float[Tensor, "d_model d_model"]): Weights for the K projection
+            v_proj_weight (Float[Tensor, "d_model d_model"]): Weights for the V projection
+            o_proj_weight (Float[Tensor, "d_model d_model"]): Weights for the output projection
+        Returns:
+        """
+
+        super(MultiheadSelfAttention, self).__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.max_seq_len = max_seq_len
+        self.d_k = self.d_model // self.num_heads
+        self.attn = ScaledDotProductAttention()
+
+        if theta is not None:
+            self.rope = RoPE(d_model=self.d_k, max_seq_length=max_seq_len, theta=theta)
+
+        self.q_proj = Linear(d_model, d_model)
+        self.k_proj = Linear(d_model, d_model)
+        self.v_proj = Linear(d_model, d_model)
+        self.o_proj = Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor, positions: torch.Tensor = None) -> torch.Tensor:
+        '''
+        Args:
+            in_features (Float[Tensor, "... sequence_length d_model"]): Tensor to run your implementation on.
+
+        Returns:
+            Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
+            implementation with the given QKV projection weights and input features.
+        """
+        '''
+        seq_len = x.shape[-2]
+        mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device))
+
+        # 投影后拆头：[..., seq, d_model] -> [..., heads, seq, d_k]
+        Q = rearrange(self.q_proj(x), "... s (h d) -> ... h s d", h=self.num_heads)
+        K = rearrange(self.k_proj(x), "... s (h d) -> ... h s d", h=self.num_heads)
+        V = rearrange(self.v_proj(x), "... s (h d) -> ... h s d", h=self.num_heads)
+
+        if positions is not None:
+            Q = self.rope(Q, positions)
+            K = self.rope(K, positions)
+
+        out = self.attn(Q=Q, K=K, V=V, mask=mask)  # 一次调用，heads 随 ... 广播
+        out = rearrange(out, "... h s d -> ... s (h d)")  # 合头
+        return self.o_proj(out)
+        # Q = self.q_proj(x)
+        # K = self.k_proj(x)
+        # V = self.v_proj(x)
+        # attn = torch.zeros_like(x)
+        # for i in range(0, self.d_model, self.d_k):
+        #     Q_i = Q[..., i : i + self.d_k]
+        #     K_i = K[..., i : i + self.d_k]
+        #     V_i = V[..., i : i + self.d_k]
+        #     if positions is not None:
+        #         Q_i = self.rope(Q_i, positions)
+        #         K_i = self.rope(K_i, positions)
+        #     attn[..., i : i + self.d_k] = self.attn(Q=Q_i, K=K_i, V=V_i, mask=mask)
+        # return self.o_proj(attn)
