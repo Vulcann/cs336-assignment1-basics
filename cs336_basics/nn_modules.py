@@ -160,7 +160,7 @@ class RoPE(torch.nn.Module):
 
 
 class Softmax(nn.Module):
-    def __init__(self, device=None, dtype=None):
+    def __init__(self):
         super(Softmax, self).__init__()
 
     def forward(self, x: torch.Tensor, dim: int) -> torch.Tensor:
