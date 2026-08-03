@@ -162,11 +162,34 @@ cython_debug/
 .ruff_cache/
 *.zip
 
-data
-data/*
-ckpt
-ckpt/*
+# ---- 产物：可以从代码+配置重建，不进版本控制 ----
+ckpt/*.pt
+logs/
+figs/
+samples/
+runs.md
+*.png
+.trash/
 artifacts
 artifacts/*
-logs
-logs/*
+ 
+# ---- 数据：太大，另行备份 ----
+data/*.bin
+data/tokenizer.json
+data/*
+ 
+# ---- 但这些要留在 git 里（每个 run 的复现凭据，几 KB）----
+!ckpt/*.config.json
+ 
+# ---- Python / uv ----
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+ 
+# ---- 进 git 的（这里只是提醒，不是语法）----
+# cs336_basics/**.py    代码
+# exp/*.json            实验定义
+# experiment_log.md     手写结论 ← 唯一真正不可重建的东西
+# pyproject.toml uv.lock

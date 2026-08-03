@@ -31,6 +31,18 @@ def load_checkpoint(src, model, optimizer=None, map_location="cpu") -> int:
     return obj["it"]
 
 
+import subprocess
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        return "nogit"
+
+
 # ---------------------------------------------------------------- config
 
 
@@ -102,6 +114,7 @@ class Config:
                 f"_d{self.model['d_model']}"
                 f"_L{self.model['num_layers']}"
             )
+            self.git_sha = _git_sha()  # git commit hash
         return self
 
     # -- 派生路径:只读属性,不进 asdict 快照 --
