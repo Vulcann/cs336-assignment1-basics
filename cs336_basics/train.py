@@ -36,6 +36,7 @@ def train(cfg):
     train_data = np.memmap(cfg.train_path, dtype=np.uint16, mode="r")
     val_data = np.memmap(cfg.val_path, dtype=np.uint16, mode="r")
 
+    logger = data.ExperimentLogger(cfg=cfg)
     # start training
     start_it = data.load_checkpoint(src=cfg.resume, model=lm, optimizer=optim) if cfg.resume else 0
     for it in range(start_it, cfg.max_iters):
@@ -60,14 +61,14 @@ def train(cfg):
 
         # 4) eval
         if it % cfg.log_interval == 0:
-            print(f"it {it}  train_loss {loss.item():.4f}  lr {lr_t:.2e}")
-        if it % cfg.eval_interval == 0:
-            log_val_loss(lm, ce, val_data, cfg, it)  # torch.no_grad() 内采样若干 batch
+            logger.log(it, train_loss=loss.item(), lr=lr_t)
+        if it % cfg.eval_interval == 0 or it == cfg.max_iters - 1:
+            logger.log(it, val_loss=log_val_loss(lm, ce, val_data, cfg, it))
         if it % cfg.ckpt_interval == 0:
             data.save_checkpoint(lm, optim, it, cfg.ckpt_path)
 
 
 if __name__ == "__main__":
     cfg = data.load_config()
-    data.save_config(cfg, Path(cfg.ckpt_path).with_suffix(".config.json"))
+    data.save_config(cfg, cfg.config_snapshot_path)
     train(cfg)

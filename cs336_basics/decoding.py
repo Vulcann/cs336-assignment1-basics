@@ -43,7 +43,7 @@ class Decoder:
         for _ in range(max_new_tokens):
             logits = self.lm(x[:, -self.max_seq_len :])
             logits = logits[:, -1, :]
-            if self.temperature == 0: 
+            if self.temperature == 0:
                 next_id = logits.argmax(-1, keepdim=True)
             else:
                 dist = self.softmax(logits / self.temperature, dim=-1)
@@ -59,6 +59,8 @@ class Decoder:
 if __name__ == "__main__":
     cfg = data.load_config()
     # data.save_config(cfg, Path(cfg.ckpt_path).with_suffix(".config.json"))
+    tokenizer = data.Tokenizer.load(cfg.tokenizer_path)  # config 只存"资产在哪"
+    eot_id = tokenizer.token_to_id("<|endoftext|>")  # id 从资产里读
 
     lm = nn_modules.TransformerLM(**cfg.model).to(cfg.device)
     # load model
@@ -68,7 +70,7 @@ if __name__ == "__main__":
         lm=lm,
         temperature=cfg.decode["temperature"],
         sampling_p=cfg.decode["sampling_p"],
-        eot_id=cfg.decode["eot_id"],
+        eot_id=eot_id,
         max_seq_len=cfg.model["max_seq_len"],  # 引用 model 组,单一事实来源
         device=cfg.device,
     )

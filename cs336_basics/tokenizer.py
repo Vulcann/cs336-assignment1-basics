@@ -1,6 +1,10 @@
-from collections.abc import Iterable, Iterator
 import re
 import regex
+import base64
+import json
+
+from pathlib import Path
+from collections.abc import Iterable, Iterator
 
 
 class Tokenizer:
@@ -11,6 +15,34 @@ class Tokenizer:
         self._special_tokens = special_tokens or []
         self._merges = {p: i for i, p in enumerate(merges)}
         self._vocab_inv = {v: k for k, v in self._vocab.items()}
+
+    # ---------------------------------------------------------- serialization
+
+    def save(self, path: str | Path) -> None:
+        """存成单个 JSON 文件。bytes 一律 base64 编码（JSON 不支持二进制）。"""
+        payload = {
+            "vocab": {str(idx): base64.b64encode(tok).decode("ascii") for idx, tok in self._vocab.items()},
+            # _merges 是 pair→rank 的 dict，按 rank 排序还原成有序列表——顺序就是合并优先级，不能丢
+            "merges": [
+                [base64.b64encode(a).decode("ascii"), base64.b64encode(b).decode("ascii")]
+                for (a, b), _ in sorted(self._merges.items(), key=lambda kv: kv[1])
+            ],
+            "special_tokens": [base64.b64encode(t).decode("ascii") for t in self._special_tokens],
+        }
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, indent=1))
+
+    @classmethod
+    def load(cls, path: str | Path) -> "Tokenizer":
+        """从 save() 的文件重建 Tokenizer。"""
+        payload = json.loads(Path(path).read_text())
+        vocab = {int(idx): base64.b64decode(tok) for idx, tok in payload["vocab"].items()}
+        merges = [(base64.b64decode(a), base64.b64decode(b)) for a, b in payload["merges"]]
+        special = [base64.b64decode(t) for t in payload["special_tokens"]]
+        return cls(vocab=vocab, merges=merges, special_tokens=special)
+
+    # ... encode / decode 等原有方法 ...
 
     @staticmethod
     def find_matches(bytes_list: list[bytes], special_tokens: list[bytes]) -> list[tuple[int, int]]:
@@ -120,3 +152,29 @@ class Tokenizer:
         """Encode an iterable of strings into an iterator of token IDs."""
         for text in iterable:
             yield from self.encode(text)
+
+    def token_to_id(self, token: bytes) -> int:
+        """按字节串反查 token id;不存在则 KeyError。"""
+        return self._vocab_inv[token]
+
+
+if __name__ == "__main__":
+    # ------------------------ 使用样例 ------------------------
+    # 1) 假设训练 BPE 后得到了 vocab / merges（这里用微型示意数据）
+    vocab = {0: b"<|endoftext|>", 1: b"a", 2: b"b", 3: b"ab"}
+    merges = [(b"a", b"b")]
+    tok = Tokenizer(vocab=vocab, merges=merges, special_tokens=[b"<|endoftext|>"])
+
+    # 2) 保存
+    tok.save("artifacts/tokenizer.json")
+
+    # 3) 加载（另一个进程/训练脚本里）
+    tok2 = Tokenizer.load("artifacts/tokenizer.json")
+
+    # 4) 验证 round-trip 完整性：内部状态逐项一致
+    assert tok2._vocab == tok._vocab
+    assert tok2._merges == tok._merges
+    assert tok2._special_tokens == tok._special_tokens
+    # 更实际的验证：编码结果一致
+    # assert tok.encode("ab") == tok2.encode("ab")
+    print("save/load round-trip OK:", Path("artifacts/tokenizer.json").stat().st_size, "bytes")

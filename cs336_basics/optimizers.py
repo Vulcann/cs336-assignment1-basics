@@ -136,6 +136,9 @@ class CosinAnnealingLRSchedule:
         self.warmup_iters = warmup_iters
         self.cosine_cycle_iters = cosine_cycle_iters
 
+    def __call__(self, it: int):
+        return self.get_lr(it)
+
     def get_lr(self, it: int):
         return cosine_annealing_lr_step(
             it=it,
