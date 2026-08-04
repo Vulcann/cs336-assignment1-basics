@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np  # 移到顶部(原来藏在 get_batch 函数体里)
 import torch
 
+from . import optimizers
+
 
 def get_batch(dataset, batch_size, context_length, device):
     starts = np.random.randint(0, len(dataset) - context_length, size=(batch_size,))
@@ -45,11 +47,22 @@ def _git_sha() -> str:
 
 # ---------------------------------------------------------------- config
 
+"""
+Config dataclass 默认值     ← 代码，git 里，唯一事实来源
+       ↓ 被覆盖
+exp/*.json                  ← 具名实验，手写，只写"和默认值的差异"
+       ↓ 被覆盖
+--set k=v                   ← 一次性微调，不落文件
+       ↓ 合成后
+ckpt/*.config.json          ← 机器写的全量快照，只读，用于复现
+"""
+
 
 @dataclass
 class Config:
     # -- run identity:一切路径由 run_name 派生 --
     run_name: str = ""  # 空 = finalize() 时自动从超参拼名
+    git_sha: str = ""
     log_dir: str = "logs"
     ckpt_dir: str = "ckpt"
     # -- data / assets --
@@ -68,6 +81,11 @@ class Config:
     eval_batches: int = 20
     ckpt_interval: int = 1000
     resume: str = ""  # 非空则从该 checkpoint 路径恢复
+    # -- 学习率：唯一的自由量，schedule / optim.lr 全部由它派生 --
+    lr: float = 1e-4
+    lr_min_ratio: float = 0.1  # min_lr = lr * ratio
+    warmup_iters: int = 200
+    cosine_cycle_iters: int = 0  # 0 → finalize 里设成 max_iters
     # -- grouped hyperparameters --
     model: dict = field(
         default_factory=lambda: {
@@ -82,20 +100,12 @@ class Config:
     )
     optim: dict = field(
         default_factory=lambda: {
-            "lr": 3e-4,
             "weight_decay": 0.01,
             "betas": (0.9, 0.95),
             "eps": 1e-8,
         }
     )
-    schedule: dict = field(
-        default_factory=lambda: {
-            "max_learning_rate": 3e-4,
-            "min_learning_rate": 3e-5,
-            "warmup_iters": 200,
-            "cosine_cycle_iters": 10_000,
-        }
-    )
+    schedule: dict = field(default_factory=dict)
     decode: dict = field(
         default_factory=lambda: {
             "temperature": 0.8,
@@ -106,6 +116,18 @@ class Config:
     )
 
     def finalize(self) -> "Config":
+        if self.cosine_cycle_iters == 0:
+            self.cosine_cycle_iters = self.max_iters  # 默认让余弦周期和训练长度对齐
+
+        self.schedule = {
+            "max_learning_rate": self.lr,
+            "min_learning_rate": self.lr * self.lr_min_ratio,
+            "warmup_iters": self.warmup_iters,
+            "cosine_cycle_iters": self.cosine_cycle_iters,
+        }
+        # 构造 optimizer 需要一个初值 —— 直接问 schedule "第 0 步该是多少"，天然自洽
+        self.optim["lr"] = optimizers.cosine_annealing_lr_step(0, **self.schedule)
+
         """所有覆盖合并完成后调用:定名。"""
         if not self.run_name:
             self.run_name = (

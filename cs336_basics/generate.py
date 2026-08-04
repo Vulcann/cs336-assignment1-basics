@@ -47,6 +47,8 @@ def build(cfg: Config):
 
     lm = TransformerLM(**cfg.model).to(cfg.device)
 
+    print(f"cfg: {cfg}")
+
     ckpt = Path(cfg.ckpt_path)
     if not ckpt.exists():
         sys.exit(f"找不到 checkpoint: {ckpt}")
