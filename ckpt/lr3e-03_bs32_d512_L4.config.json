@@ -1,12 +1,13 @@
 {
-  "run_name": "bs8",
+  "run_name": "lr3e-03_bs32_d512_L4",
+  "git_sha": "8d5248c",
   "log_dir": "logs",
   "ckpt_dir": "ckpt",
   "train_path": "data/train.bin",
   "val_path": "data/val.bin",
   "tokenizer_path": "artifacts/tokenizer.json",
   "device": "cuda:0",
-  "batch_size": 8,
+  "batch_size": 32,
   "context_length": 256,
   "max_iters": 10000,
   "max_l2_norm": 1.0,
@@ -15,6 +16,10 @@
   "eval_batches": 20,
   "ckpt_interval": 1000,
   "resume": "",
+  "lr": 0.003,
+  "lr_min_ratio": 0.1,
+  "warmup_iters": 200,
+  "cosine_cycle_iters": 10000,
   "model": {
     "vocab_size": 10000,
     "num_layers": 4,
@@ -25,17 +30,17 @@
     "theta": 10000.0
   },
   "optim": {
-    "lr": 0.0003,
     "weight_decay": 0.01,
     "betas": [
       0.9,
       0.95
     ],
-    "eps": 1e-08
+    "eps": 1e-08,
+    "lr": 0.0
   },
   "schedule": {
-    "max_learning_rate": 0.0005,
-    "min_learning_rate": 5e-05,
+    "max_learning_rate": 0.003,
+    "min_learning_rate": 0.00030000000000000003,
     "warmup_iters": 200,
     "cosine_cycle_iters": 10000
   },

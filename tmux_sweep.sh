@@ -4,9 +4,9 @@
 #   ./tmux_sweep.sh start train         # 起单次训练，用 Config dataclass 的默认值
 #   ./tmux_sweep.sh start train:big     # 带标签，会话 cs336-train-big，可并行多个
 #   CONFIG=exp/big.json ./tmux_sweep.sh start train:big    # 用某个实验配置
-#   ./tmux_sweep.sh start lr            # 起 lr sweep（tmux 会话 cs336-lr）
+#   ./tmux_sweep.sh start train --set max_iters=2000       # 多余的参数原样透传
+#   ./tmux_sweep.sh start lr            # 起 lr sweep（会话 cs336-lr）
 #   ./tmux_sweep.sh start bs            # 起 batch_size sweep
-#   ./tmux_sweep.sh start lr --force    # 多余的参数原样透传给 python 脚本
 #   ./tmux_sweep.sh ls                  # 看所有会话 + 运行/已完成
 #   ./tmux_sweep.sh attach train:big    # 进去看（Ctrl-b 然后 d 脱离，别按 Ctrl-C）
 #   ./tmux_sweep.sh log train:big       # 在当前终端 tail -f 日志（Ctrl-C 只退 tail）
@@ -18,6 +18,11 @@
 #   CONFIG=exp/small.json ./tmux_sweep.sh start train    # 用某个实验配置（默认不用）
 #   GPU=1 ./tmux_sweep.sh start train:big                # 指定 CUDA_VISIBLE_DEVICES
 #   UV=/path/to/uv ./tmux_sweep.sh start train           # uv 装在非标准位置
+#
+# 只有 train 接受透传参数和 CONFIG。sweep 系脚本（lr / bs）没有命令行接口：
+# 网格和基线配置都写死在各自的 .py 里，改实验就去改那个文件。这不是偷懒——
+# 本脚本不解析下游的参数，传了它不认识的东西只会被 python 无声吞掉，
+# 你以为换了配置其实没换，比直接报错难查得多，所以这里选择当场拒绝。
 #
 # 配置文件怎么组织（为什么 start train 默认不读任何 JSON）：
 #   默认值的唯一事实来源是 Config dataclass —— 它在 git 里、有类型、和代码同步演进。
@@ -61,22 +66,23 @@ PY="$UV run python"
 mkdir -p "$LOG_DIR"
 
 # ------------------------------------------------------------------ 作业表
-# 加新实验族只改这里。
-# CFG_ARG 为空时整个 --config 都不出现，python 那边走 dataclass 默认值。
+# 加新实验族只改这里。第二列 = 这个作业认不认命令行参数（CONFIG / 透传）。
+# 只写真实存在、且真的能接受这些参数的东西：脚本不认识的参数 python 那边
+# 是静默忽略的，写多了等于给自己埋一个“以为生效了其实没生效”的雷。
 CFG_ARG=""
 [[ -n "$CONFIG" ]] && CFG_ARG="--config $CONFIG"
 
 job_cmd() {
   case "$1" in
-    train)  echo "$PY -u -m cs336_basics.train${CFG_ARG:+ $CFG_ARG}" ;;
-    lr)     echo "$PY -u -m cs336_basics.sweep --grid lr${CFG_ARG:+ $CFG_ARG}" ;;
-    bs)     echo "$PY -u -m cs336_basics.batch_size_sweep" ;;
-    depth)  echo "$PY -u -m cs336_basics.sweep --grid depth${CFG_ARG:+ $CFG_ARG}" ;;
-    *)      return 1 ;;
+    train) echo "$PY -u -m cs336_basics.train${CFG_ARG:+ $CFG_ARG}" ;;
+    lr)    echo "$PY -u -m cs336_basics.lr_sweep" ;;             # 网格 = sweep.py 里的 GRID
+    bs)    echo "$PY -u -m cs336_basics.batch_size_sweep" ;;
+    *)     return 1 ;;
   esac
 }
 
-JOBS="train lr bs depth"
+JOBS="train lr bs"
+ARGV_JOBS="train"          # 这些作业才接受 CONFIG 和透传参数，其余传了直接报错
 
 # ---- job[:tag] 解析 -----------------------------------------------------
 # JOB 决定跑什么命令，KEY 决定会话名 / 日志名。tmux 的 target 语法里 : 和 .
@@ -103,11 +109,20 @@ cmd_start() {
   local base; base="$(job_cmd "$JOB")" || die "未知作业 '$JOB'（可选: $JOBS）"
   local sess; sess="$(sess_of "$KEY")"
   local log;  log="$(log_of "$KEY")"
+  local spec="$JOB${TAG:+:$TAG}"
+
+  # 不吃参数的作业，收到参数就当场拒绝。默默透传给一个没有 argparse 的脚本，
+  # python 会连个警告都不给——等你发现扫的还是旧网格，一小时已经烧掉了。
+  if [[ " $ARGV_JOBS " != *" $JOB "* ]]; then
+    [[ $# -eq 0 ]] || die "$JOB 不接受命令行参数（收到: $*）。
+       它的网格和基线配置写死在 python 文件里，改实验请直接改那里。"
+    [[ -z "$CONFIG" ]] || die "$JOB 不读 CONFIG（你设了 CONFIG=$CONFIG，它不会生效）。
+       基线配置写死在 sweep 脚本顶部的 BASE_CONFIG，要换请改那一行。"
+  fi
 
   # 起飞前检查配置文件。不查的话：tmux 会话照样建起来，python 一秒后就 FileNotFound
   # 死掉，你还得 log 一遍才知道原因——错误离犯错的地方越近越好。
   if [[ "$base" == *--config* && ! -f "$PROJECT_DIR/$CONFIG" ]]; then
-    local spec="$JOB${TAG:+:$TAG}"
     die "找不到配置文件 $CONFIG（相对 $PROJECT_DIR）。三选一：
        换一个存在的  : CONFIG=exp/small.json $0 start $spec
        先照默认值生成: $0 init-config $CONFIG   （生成后删掉与默认值相同的项）
@@ -118,9 +133,10 @@ cmd_start() {
     die "会话 $sess 已存在。先 '$0 stop $KEY'，或 '$0 attach $KEY' 看看它在干嘛。"
   fi
 
-  # 额外参数原样追加（如 --force / --set batch_size=64）
+  # 额外参数原样追加（如 --set batch_size=64）。用 %q 逐个转义而不是 "$*"：
+  # 后者把参数拍平成一个字符串，--set 'note=a b' 会散成三个参数。
   local full="$base"
-  if [[ $# -gt 0 ]]; then full="$base $*"; fi
+  if [[ $# -gt 0 ]]; then full="$base $(printf '%q ' "$@")"; full="${full% }"; fi
 
   # 单次训练带标签时自动对齐 run_name，让 ckpt / 日志 / 会话三处名字一致。
   # sweep 类作业自己会给每个 run 命名，不能这么覆盖，所以只对 train 做。
@@ -135,6 +151,9 @@ cmd_start() {
   # 把要跑的东西写成一个 runner 脚本，而不是塞进 tmux 命令行 —— 省掉多层引号转义，
   # 出问题时还能直接 bash 这个文件复现。
   local runner="$LOG_DIR/$KEY.run.sh"
+  # 日志开头那行「$ 实际命令」用单引号原样打印：直接 echo 的话 bash 会把
+  # --set 'name=a b' 里的引号吃掉，回头看日志会以为传的是两个参数。
+  local disp=${full//\'/\'\\\'\'}
   {
     echo '#!/usr/bin/env bash'
     echo "cd \"$PROJECT_DIR\"                # uv 靠 cwd 找 pyproject.toml 定位项目环境"
@@ -142,7 +161,7 @@ cmd_start() {
     cat <<EOF
 exec > >(tee -a "$log") 2>&1          # 屏幕和日志各留一份
 echo "=== $sess 开始 \$(date -Is) ==="
-echo "\$ $full"
+printf '\$ %s\n' '$disp'
 echo
 $full
 rc=\$?

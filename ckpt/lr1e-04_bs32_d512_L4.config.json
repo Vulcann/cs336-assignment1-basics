@@ -1,6 +1,6 @@
 {
   "run_name": "lr1e-04_bs32_d512_L4",
-  "git_sha": "c2eb729",
+  "git_sha": "8d5248c",
   "log_dir": "logs",
   "ckpt_dir": "ckpt",
   "train_path": "data/train.bin",

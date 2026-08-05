@@ -82,7 +82,7 @@ class Config:
     ckpt_interval: int = 1000
     resume: str = ""  # 非空则从该 checkpoint 路径恢复
     # -- 学习率：唯一的自由量，schedule / optim.lr 全部由它派生 --
-    lr: float = 1e-4
+    lr: float = 1e-3
     lr_min_ratio: float = 0.1  # min_lr = lr * ratio
     warmup_iters: int = 200
     cosine_cycle_iters: int = 0  # 0 → finalize 里设成 max_iters
