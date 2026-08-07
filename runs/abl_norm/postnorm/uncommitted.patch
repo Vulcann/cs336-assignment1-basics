@@ -1,0 +1,28 @@
+diff --git a/cs336_basics/nn_modules.py b/cs336_basics/nn_modules.py
+index cf060e1..7bd1542 100644
+--- a/cs336_basics/nn_modules.py
++++ b/cs336_basics/nn_modules.py
+@@ -283,13 +283,17 @@ class TransformerBlock(nn.Module):
+         self.ln2 = RMSNorm(d_model=d_model)
+ 
+     def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+-        ln1 = self.ln1(x)
+-        attn = self.attn(ln1, positions)
+-        x = x + attn
++        # ln1 = self.ln1(x)
++        # attn = self.attn(ln1, positions)
++        # x = x + attn
+ 
+-        ln2 = self.ln2(x)
+-        result = self.ffn(ln2)
+-        return x + result
++        # ln2 = self.ln2(x)
++        # result = self.ffn(ln2)
++        # return x + result
++
++        # post-norm
++        z = self.ln1(x + self.attn(x, positions))
++        return self.ln2(z + self.ffn(z))
+ 
+ 
+ class TransformerLM(nn.Module):

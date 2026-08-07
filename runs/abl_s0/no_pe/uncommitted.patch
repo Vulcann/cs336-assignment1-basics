@@ -1,0 +1,14 @@
+diff --git a/cs336_basics/nn_modules.py b/cs336_basics/nn_modules.py
+index cf060e1..43c0aed 100644
+--- a/cs336_basics/nn_modules.py
++++ b/cs336_basics/nn_modules.py
+@@ -320,7 +320,8 @@ class TransformerLM(nn.Module):
+ 
+     def forward(self, x: torch.Tensor) -> torch.Tensor:
+         seq_len = x.shape[-1]
+-        positions = torch.arange(seq_len, dtype=torch.int, device=x.device)
++        # positions = torch.arange(seq_len, dtype=torch.int, device=x.device)
++        positions = None
+ 
+         x = self.token_embeddings(x)
+         for layer in self.layers:

@@ -193,3 +193,4 @@ __pycache__/
 # exp/*.json            实验定义
 # experiment_log.md     手写结论 ← 唯一真正不可重建的东西
 # pyproject.toml uv.lock
+runs/**/*.pt

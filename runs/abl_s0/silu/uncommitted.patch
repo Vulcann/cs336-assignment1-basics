@@ -1,0 +1,40 @@
+diff --git a/.gitignore b/.gitignore
+index 607e7a9..2ef1912 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -193,3 +193,4 @@ __pycache__/
+ # exp/*.json            实验定义
+ # experiment_log.md     手写结论 ← 唯一真正不可重建的东西
+ # pyproject.toml uv.lock
++runs/*.pt
+diff --git a/cs336_basics/nn_modules.py b/cs336_basics/nn_modules.py
+index cf060e1..e3ec2d1 100644
+--- a/cs336_basics/nn_modules.py
++++ b/cs336_basics/nn_modules.py
+@@ -273,12 +273,26 @@ class MultiheadSelfAttention(nn.Module):
+         # return self.output_proj(attn)
+ 
+ 
++class FFN(nn.Module):
++    """W2(SiLU(W1 x)) —— 去掉门控的那一版，用来和 SwiGLU 做等参数量对照。"""
++
++    def __init__(self, d_model: int, d_ff: int):
++        super().__init__()
++        self.w1 = Linear(d_model, d_ff)
++        self.w2 = Linear(d_ff, d_model)
++        self.silu = SiLU()
++
++    def forward(self, x):
++        return self.w2(self.silu(self.w1(x)))
++
++
+ class TransformerBlock(nn.Module):
+     def __init__(self, d_model: int, num_heads: int, max_seq_len: int, d_ff: int, theta: float | None = None):
+         super(TransformerBlock, self).__init__()
+ 
+         self.attn = MultiheadSelfAttention(d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len, theta=theta)
+-        self.ffn = SwiGLU(d_model=d_model, d_ff=d_ff)
++        # self.ffn = SwiGLU(d_model=d_model, d_ff=d_ff)
++        self.ffn = FFN(d_model=d_model, d_ff=d_ff)
+         self.ln1 = RMSNorm(d_model=d_model)
+         self.ln2 = RMSNorm(d_model=d_model)
