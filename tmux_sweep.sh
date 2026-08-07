@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # tmux_sweep.sh —— 用 tmux 把训练 / sweep 挂到后台，关掉 ssh / 终端也照跑。（uv 版）
 #
-#   ./tmux_sweep.sh start train         # 起单次训练，用 Config dataclass 的默认值
-#   ./tmux_sweep.sh start train:big     # 带标签，会话 cs336-train-big，可并行多个
-#   CONFIG=exp/big.json ./tmux_sweep.sh start train:big    # 用某个实验配置
-#   ./tmux_sweep.sh start train --set max_iters=2000       # 多余的参数原样透传
+#   ./tmux_sweep.sh start train                      # 随手跑，落在 runs/_scratch/<自动名>/
+#   ./tmux_sweep.sh start train:abl_norm/postnorm    # 具名 run，落在 runs/abl_norm/postnorm/
+#   ./tmux_sweep.sh start train:abl_norm/postnorm_s0 --set seed=0
+#   CONFIG=exp/big.json ./tmux_sweep.sh start train:big     # 用某个实验配置
+#   ./tmux_sweep.sh start train:x --set max_iters=2000      # 多余的参数原样透传
 #   ./tmux_sweep.sh start lr            # 起 lr sweep（会话 cs336-lr）
 #   ./tmux_sweep.sh start bs            # 起 batch_size sweep
 #   ./tmux_sweep.sh ls                  # 看所有会话 + 运行/已完成
-#   ./tmux_sweep.sh attach train:big    # 进去看（Ctrl-b 然后 d 脱离，别按 Ctrl-C）
-#   ./tmux_sweep.sh log train:big       # 在当前终端 tail -f 日志（Ctrl-C 只退 tail）
-#   ./tmux_sweep.sh stop train:big      # 停掉这个会话（连带杀掉里面的 python）
+#   ./tmux_sweep.sh attach train:abl_norm/postnorm   # 进去看（Ctrl-b 然后 d 脱离）
+#   ./tmux_sweep.sh log train:abl_norm/postnorm      # tail -f 日志（Ctrl-C 只退 tail）
+#   ./tmux_sweep.sh stop train:abl_norm/postnorm     # 停掉这个会话（连带杀掉 python）
 #   ./tmux_sweep.sh clean               # 清掉已结束的会话
 #   ./tmux_sweep.sh init-config exp/x.json   # 照 dataclass 默认值生成一份，供你裁剪
 #
@@ -18,6 +19,18 @@
 #   CONFIG=exp/small.json ./tmux_sweep.sh start train    # 用某个实验配置（默认不用）
 #   GPU=1 ./tmux_sweep.sh start train:big                # 指定 CUDA_VISIBLE_DEVICES
 #   UV=/path/to/uv ./tmux_sweep.sh start train           # uv 装在非标准位置
+#
+# 关于 job:tag —— 冒号后面那截就是 Config.tag，一处输入决定三件事：
+#   tmux 会话名 cs336-train-abl_norm-postnorm （/ 压成 -，因为 tmux 的 target 语法
+#                                              里 : 和 . 是分隔符，路径分隔也不合适）
+#   本脚本的日志 logs/_tmux/train-abl_norm-postnorm.log
+#   训练的全部产物 runs/abl_norm/postnorm/{metrics.jsonl,config.json,ckpt.pt}
+# tag 允许带 / 用来分层：一层平铺撑不住 arm x seed，三个 arm 三个 seed 就是九个同级
+# 目录，下周再来一族就只能靠字符串前缀去 glob 了。
+#
+# 不给 tag 会落到 runs/_scratch/<按超参自动拼的名>/，那里不做「已存在就拒绝」的检查
+# ——smoke test 和调试跑不该被逼着起名字。反过来，具名 run 重名会当场报错而不是覆盖：
+# 人给的名字不会自动撞，但会被人自己撞（崩了重跑、忘了上周用过），而覆盖是静默的。
 #
 # 只有 train 接受透传参数和 CONFIG。sweep 系脚本（lr / bs）没有命令行接口：
 # 网格和基线配置都写死在各自的 .py 里，改实验就去改那个文件。这不是偷懒——
@@ -30,13 +43,13 @@
 #   如果让 start train 默认去读 exp/base.json，就有了两份默认值：改了 dataclass 而
 #   忘了改 base.json，跑出来的其实是旧默认值，而且 python train.py 裸跑还会因为文件
 #   不存在直接崩——默认路径不该依赖任何未纳入版本控制/可能缺失的文件。
-#   完整快照另有其人：训练启动时 save_config() 落盘的 ckpt/*.config.json 才是那份
+#   完整快照另有其人：训练启动时 save_config() 落盘的 runs/<tag>/config.json 才是那份
 #   「实际生效的全量配置」，它由机器写、只读、用于复现，不参与上面的覆盖链。
 #   优先级：dataclass 默认值 < CONFIG 指定的 exp/*.json < 命令行 --set
 #
-# 关于标签 job:tag —— sweep 每次跑的是一整族实验，同时只该有一个；但单次 train
-# 你多半想同时开好几个比着看。标签让会话名、日志名、以及 train 的 run_name 三者
-# 对齐：start train:big 会自动追加 --set run_name=big，除非你自己指定了。
+# 关于 seed：Config.seed 默认 null = 随机抽一个，但抽完会当场定死写进 config.json，
+# 所以随手跑的也照样可复现。要跑 seed 组就显式给：--set seed=0，并把它写进 tag
+# （…_s0），让目录名和实际 seed 对得上。
 #
 # 为什么 tmux 能扛住断线：tmux 服务端是脱离终端的独立进程，你的 ssh 连接只是
 # 一个“客户端”。断线只是客户端没了，服务端和里面跑的 python 毫发无损。
@@ -48,7 +61,7 @@ LOG_DIR="$PROJECT_DIR/logs/_tmux"
 PREFIX="cs336"
 # 默认为空 = 不传 --config = 用 Config dataclass 里的默认值。
 # 默认值的唯一事实来源是 python 代码，不是某个 JSON 文件；exp/*.json 是"实验",
-# 要用哪个必须显式说出来。详见文件末尾的“配置文件怎么组织”。
+# 要用哪个必须显式说出来。详见文件开头的“配置文件怎么组织”。
 CONFIG="${CONFIG-}"
 
 die() { echo "错误: $*" >&2; exit 1; }
@@ -75,7 +88,7 @@ CFG_ARG=""
 job_cmd() {
   case "$1" in
     train) echo "$PY -u -m cs336_basics.train${CFG_ARG:+ $CFG_ARG}" ;;
-    lr)    echo "$PY -u -m cs336_basics.lr_sweep" ;;             # 网格 = sweep.py 里的 GRID
+    lr)    echo "$PY -u -m cs336_basics.lr_sweep" ;;             # 网格 = lr_sweep.py 里的 LRS
     bs)    echo "$PY -u -m cs336_basics.batch_size_sweep" ;;
     *)     return 1 ;;
   esac
@@ -85,17 +98,18 @@ JOBS="train lr bs"
 ARGV_JOBS="train"          # 这些作业才接受 CONFIG 和透传参数，其余传了直接报错
 
 # ---- job[:tag] 解析 -----------------------------------------------------
-# JOB 决定跑什么命令，KEY 决定会话名 / 日志名。tmux 的 target 语法里 : 和 .
-# 是分隔符（session:window.pane），会话名里带上它们后面所有 -t 都会解析错，
-# 所以标签里的这些字符统一换成 -。
+# TAG 原样传给 python（可以带 / 分层）；KEY 是把 / 压成 - 之后的版本，只用来起
+# tmux 会话名和日志文件名 —— 前者因为 tmux 的 target 语法是 session:window.pane，
+# 后者因为文件名里不能有 /。
 JOB=""; TAG=""; KEY=""
 parse_job() {
   [[ -n "${1:-}" ]] || die "用法: $0 $ACTION <$(echo "$JOBS" | tr ' ' '|')>[:标签] [额外参数...]"
   JOB="${1%%:*}"
   TAG=""
   [[ "$1" == *:* ]] && TAG="${1#*:}"
-  TAG="${TAG//[^A-Za-z0-9_-]/-}"
-  KEY="$JOB${TAG:+-$TAG}"
+  TAG="${TAG//[^A-Za-z0-9_\/-]/-}"   # 白名单：字母数字 _ - 和分层用的 /
+  TAG="${TAG#/}"; TAG="${TAG%/}"     # 掐掉首尾的 /，免得拼出 runs//x
+  KEY="$JOB${TAG:+-${TAG//\//-}}"
 }
 
 sess_of() { echo "${PREFIX}-$1"; }
@@ -117,7 +131,7 @@ cmd_start() {
     [[ $# -eq 0 ]] || die "$JOB 不接受命令行参数（收到: $*）。
        它的网格和基线配置写死在 python 文件里，改实验请直接改那里。"
     [[ -z "$CONFIG" ]] || die "$JOB 不读 CONFIG（你设了 CONFIG=$CONFIG，它不会生效）。
-       基线配置写死在 sweep 脚本顶部的 BASE_CONFIG，要换请改那一行。"
+       基线配置写死在 sweep 脚本顶部的 BASE dict，要换请改那一行。"
   fi
 
   # 起飞前检查配置文件。不查的话：tmux 会话照样建起来，python 一秒后就 FileNotFound
@@ -138,13 +152,14 @@ cmd_start() {
   local full="$base"
   if [[ $# -gt 0 ]]; then full="$base $(printf '%q ' "$@")"; full="${full% }"; fi
 
-  # 单次训练带标签时自动对齐 run_name，让 ckpt / 日志 / 会话三处名字一致。
-  # sweep 类作业自己会给每个 run 命名，不能这么覆盖，所以只对 train 做。
-  if [[ "$JOB" == train && -n "$TAG" && "$full" != *run_name=* ]]; then
+  # 把冒号后面那截交给 Config.tag —— 于是会话名、本脚本日志、runs/ 下的产物目录
+  # 三者同名。sweep 类作业给每个 run 自己命名，不能这么覆盖，所以只对 train 做；
+  # 你自己已经 --set tag=... 了就不插手。
+  if [[ "$JOB" == train && -n "$TAG" && "$full" != *" tag="* ]]; then
     if [[ "$full" == *" --set "* ]]; then
-      full="$full run_name=$TAG"
+      full="$full tag=$TAG"
     else
-      full="$full --set run_name=$TAG"
+      full="$full --set tag=$TAG"
     fi
   fi
 
@@ -179,6 +194,10 @@ EOF
   echo "已在 tmux 会话 $sess 中启动："
   [[ -n "${GPU:-}" ]] && echo "  CUDA_VISIBLE_DEVICES=$GPU"
   echo "  $full"
+  if [[ "$JOB" == train ]]; then
+    if [[ -n "$TAG" ]]; then echo "  产物  : runs/$TAG/"
+    else echo "  产物  : runs/_scratch/<按超参自动拼的名>/   （没给标签，视为随手跑）"; fi
+  fi
   echo
   echo "  进去看   : $0 attach $KEY     (Ctrl-b 再按 d 脱离)"
   echo "  追日志   : $0 log $KEY        (Ctrl-C 只退出 tail)"
@@ -281,6 +300,8 @@ PYEOF
   echo "只留这个实验真正要改的几项。配置文件是 diff，不是副本；留成副本以后改"
   echo "dataclass 默认值就再也传播不到它了。"
   echo "另：JSON 没有元组，betas 这类会存成 [0.9, 0.95]，载回来是 list。"
+  echo "另：seed 会是 null（= 每次随机），tag 会是空串（= 落到 _scratch）；"
+  echo "    这两项通常留给命令行给，别写死在 exp/*.json 里。"
 }
 
 # ------------------------------------------------------------------ 停止 / 清理
